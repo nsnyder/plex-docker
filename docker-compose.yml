@@ -4,20 +4,20 @@
 
 services:
   plex:
-    # LinuxServer image: handles /dev/dri permissions for Quick Sync automatically
-    # and is built for updates through new image pulls (which Watchtower does)
-    # official Plex image instead of the LinuxServer one
     image: plexinc/pms-docker:latest
+    container_name: plex
     restart: unless-stopped
     environment:
-      # this image's names for the user and group Plex runs as
+      # This image's names for the user and group Plex runs as:
       - PLEX_UID=1000
       - PLEX_GID=1000
       - TZ=America/New_York
-      # one-time claim token, read from the .env file
+      # One-time claim token, read from the .env file:
       - PLEX_CLAIM=${PLEX_CLAIM:-}
-      - ADVERTISE_IP=http://192.168.1.6:32400/
-    container_name: plex
+      - ADVERTISE_IP=http://192.168.1.6:32400,https://plex.snydern.com:443
+    networks:
+      # Join Traefik's network; don't also stay on the default one, or Traefik may pick the wrong IP.
+      - gateway
     ports:
       - 32400:32400/tcp
       - 8324:8324/tcp
@@ -28,31 +28,45 @@ services:
       - 32413:32413/udp
       - 32414:32414/udp
     devices:
-      # pass the Intel GPU through for Quick Sync hardware transcoding (needs Plex Pass)
+      # pass the Intel GPU through for Quick Sync hardware transcoding (needs Plex Pass).
       - /dev/dri:/dev/dri
     volumes:
-      # Plex config and database stay on the Mac's local disk (SQLite performs badly on NFS)
+      # Plex config and database stay on the Mac's local disk (SQLite performs badly on NFS).
       - ./config:/config
-      # scratch space for transcodes; set the transcoder temp directory to /transcode in Plex settings
+      # Scratch space for transcodes; set the transcoder temp directory to /transcode in Plex settings.
       - ./transcode:/transcode
       - /media/mycloud:/media/mycloud:ro
     labels:
-      # opt this container in to Watchtower updates
-      - "com.centurylinklabs.watchtower.enable=true"
+      # Opt this container in to Watchtower updates.
+      - com.centurylinklabs.watchtower.enable=true
+      - traefik.enable=true
+      # tell Traefik which network to reach Plex on:
+      - traefik.docker.network=local-services_gateway
+      - traefik.http.routers.plex.rule=Host(`plex.snydern.com`)
+      - traefik.http.routers.plex.entrypoints=websecure
+      - traefik.http.routers.plex.tls.certresolver=le
+      # Plex serves plain HTTP on 32400 inside the container.
+      - traefik.http.services.plex.loadbalancer.server.port=32400
 
   watchtower:
-    # maintained fork; the original containrrr/watchtower repository is archived
+    # Maintained fork; the original containrrr/watchtower repository is archived.
     image: nickfedor/watchtower:latest
     container_name: watchtower
     restart: unless-stopped
     volumes:
-      # Watchtower needs the Docker socket to pull images and restart containers
+      # Watchtower needs the Docker socket to pull images and restart containers.
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - TZ=America/New_York
-      # only touch containers that carry the watchtower.enable=true label
+      # Only touch containers that carry the watchtower.enable=true label.
       - WATCHTOWER_LABEL_ENABLE=true
-      # delete the old image after each update so disk space is not wasted
+      # Delete the old image after each update so disk space is not wasted.
       - WATCHTOWER_CLEANUP=true
-      # check for updates daily at 4:00 AM (cron format with a leading seconds field)
+      # Check for updates daily at 4:00 AM (cron format with a leading seconds field).
       - "WATCHTOWER_SCHEDULE=0 0 4 * * *"
+
+networks:
+  gateway:
+    # The network your Traefik compose project already created:
+    external: true
+    name: local-services_gateway
